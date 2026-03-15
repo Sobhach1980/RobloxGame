@@ -15,9 +15,13 @@ local Players           = game:GetService("Players")
 local UserInputService  = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local VFXHandler        = require(script.Parent.VFXHandler)
-local CinematicHandler  = require(script.Parent.CinematicHandler)
-local HUDController     = require(game.ReplicatedStorage.Shared.HUD.HUDController)
+local VFXHandler           = require(script.Parent.VFXHandler)
+local CinematicHandler     = require(script.Parent.CinematicHandler)
+local HUDController        = require(game.ReplicatedStorage.Shared.HUD.HUDController)
+local SoundManager         = require(game.ReplicatedStorage.Shared.Sound.SoundManager)
+local CharacterSelectUI    = require(script.Parent.CharacterSelectUI)
+local MatchUI              = require(script.Parent.MatchUI)
+local ResultsUI            = require(script.Parent.ResultsUI)
 
 local localPlayer = Players.LocalPlayer
 
@@ -42,6 +46,8 @@ local Remotes = {
     HUDRemote       = getRemote("HUDRemote"),
     InputRemote     = getRemote("InputRemote"),
     SelectCharacter = getRemote("SelectCharacter"),
+    MatchUIRemote   = getRemote("MatchUIRemote"),
+    SoundRemote     = getRemote("SoundRemote"),
 }
 
 -- ── Initialise client systems ──────────────────────────────────────────────
@@ -57,6 +63,9 @@ CinematicHandler.Init(
 )
 
 local hud = HUDController.new(localPlayer)
+
+SoundManager.Init(Remotes.SoundRemote)
+CharacterSelectUI.Init(Remotes.SelectCharacter)
 
 -- HUD events from server
 Remotes.HUDRemote.OnClientEvent:Connect(function(event, ...)
@@ -74,6 +83,52 @@ Remotes.HUDRemote.OnClientEvent:Connect(function(event, ...)
         hud:OnUltTick(...)
     elseif event == "UltReverted" then
         hud:OnUltReverted(...)
+    end
+end)
+
+-- Match UI events from MatchServer
+Remotes.MatchUIRemote.OnClientEvent:Connect(function(event, ...)
+    if event == "ShowCharSelect" then
+        MatchUI.Hide()
+        ResultsUI.Hide()
+        CharacterSelectUI.Show()
+
+    elseif event == "RoundBanner" then
+        CharacterSelectUI.Hide()
+        MatchUI.Show()
+        MatchUI.ShowRoundBanner(...)
+
+    elseif event == "Countdown" then
+        MatchUI.ShowCountdown(...)
+
+    elseif event == "Fight" then
+        MatchUI.ShowFight()
+
+    elseif event == "SetTimer" then
+        MatchUI.SetTimer(...)
+
+    elseif event == "TimerExpired" then
+        MatchUI.ShowTimerExpired()
+
+    elseif event == "UpdateStocks" then
+        MatchUI.UpdateStocks(...)
+
+    elseif event == "KO" then
+        MatchUI.ShowKO(...)
+
+    elseif event == "RoundWin" then
+        MatchUI.ShowRoundWin(...)
+
+    elseif event == "RoundDraw" then
+        MatchUI.ShowRoundDraw()
+
+    elseif event == "MatchEnd" then
+        MatchUI.Hide()
+        ResultsUI.Show(...)
+
+    elseif event == "RematchTick" then
+        local secondsLeft = select(1, ...)
+        ResultsUI.UpdateRematch(secondsLeft)
     end
 end)
 

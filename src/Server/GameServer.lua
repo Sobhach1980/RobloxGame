@@ -20,6 +20,7 @@ local VFXSystem          = require(game.ReplicatedStorage.Shared.VFX.VFXSystem)
 local HitStunKnockback   = require(game.ReplicatedStorage.Shared.CombatEngine.HitStunKnockback)
 local RagdollEngine      = require(game.ReplicatedStorage.Shared.CombatEngine.RagdollEngine)
 local RosterConfig       = require(game.ReplicatedStorage.RosterConfig)
+local MatchServer        = require(script.Parent.MatchServer)
 
 -- ── Character controllers ──────────────────────────────────────────────────
 
@@ -62,11 +63,16 @@ local Remotes = {
     InputRemote        = makeRemote("InputRemote"),
     -- Character selection (client → server)
     SelectCharacter    = makeRemote("SelectCharacter"),
+    -- Match UI events (server → clients)
+    MatchUIRemote      = makeRemote("MatchUIRemote"),
+    -- Sound triggers (server → clients)
+    SoundRemote        = makeRemote("SoundRemote"),
 }
 
 -- ── Initialise server-side systems with the remotes they need ──────────────
 
 VFXSystem.Init(Remotes.VFXRemote)
+MatchServer.Init(Remotes)
 
 -- ── Active controller registry  player → controller instance ──────────────
 
