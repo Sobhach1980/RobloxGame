@@ -16,14 +16,19 @@
       R – You Shouldn't Look
 --]]
 
-local MovementSystem    = require(script.Parent.Parent.Parent.Shared.CombatEngine.MovementSystem)
-local DashSystem        = require(script.Parent.Parent.Parent.Shared.CombatEngine.DashSystem)
-local M1System          = require(script.Parent.Parent.Parent.Shared.CombatEngine.M1System)
-local BlockParrySystem  = require(script.Parent.Parent.Parent.Shared.CombatEngine.BlockParrySystem)
-local EvasiveSystem     = require(script.Parent.Parent.Parent.Shared.CombatEngine.EvasiveSystem)
-local CooldownManager   = require(script.Parent.Parent.Parent.Shared.CombatEngine.CooldownManager)
+local RunService = game:GetService("RunService")
+
+local MovementSystem      = require(script.Parent.Parent.Parent.Shared.CombatEngine.MovementSystem)
+local DashSystem          = require(script.Parent.Parent.Parent.Shared.CombatEngine.DashSystem)
+local M1System            = require(script.Parent.Parent.Parent.Shared.CombatEngine.M1System)
+local BlockParrySystem    = require(script.Parent.Parent.Parent.Shared.CombatEngine.BlockParrySystem)
+local EvasiveSystem       = require(script.Parent.Parent.Parent.Shared.CombatEngine.EvasiveSystem)
+local CooldownManager     = require(script.Parent.Parent.Parent.Shared.CombatEngine.CooldownManager)
 local UltimateGaugeSystem = require(script.Parent.Parent.Parent.Shared.CombatEngine.UltimateGaugeSystem)
 local UltimateTimerSystem = require(script.Parent.Parent.Parent.Shared.CombatEngine.UltimateTimerSystem)
+local AnimationManager    = require(script.Parent.Parent.Parent.Shared.Animation.AnimationManager)
+local UltActivatorSequence = require(script.Parent.Parent.Parent.Shared.Cinematic.UltActivatorSequence)
+local VFXSystem           = require(script.Parent.Parent.Parent.Shared.VFX.VFXSystem)
 
 local EnderTeleportation = require(script.Parent.Abilities.Enderman_EnderTeleportation)
 local EnderStrike        = require(script.Parent.Abilities.Enderman_EnderStrike)
@@ -38,9 +43,11 @@ EndermanController.__index = EndermanController
 
 local ULT_DURATION = 22
 
-function EndermanController.new(character)
+function EndermanController.new(character, player, remotes)
     local self = setmetatable({}, EndermanController)
     self.Character  = character
+    self.Player     = player
+    self.Remotes    = remotes
     self.IsAwakened = false
 
     self.Movement  = MovementSystem.new(character, "Enderman")
@@ -50,43 +57,35 @@ function EndermanController.new(character)
     self.Evasive   = EvasiveSystem.new(character, "Enderman", self.Movement)
     self.Cooldowns = CooldownManager.new()
     self.UltTimer  = UltimateTimerSystem.new()
+    self.Anim      = AnimationManager.new(character, "Enderman")
 
-    self.UltGauge  = UltimateGaugeSystem.new(function()
-        -- HUDEvent:FireClient(player, "UltReady", true)
+    self.UltGauge = UltimateGaugeSystem.new(function()
+        remotes.HUDRemote:FireClient(player, "UltReady", true)
     end)
     self.UltGauge:StartPassive()
 
     self.Abilities = {
-        base = {
-            Q = EnderTeleportation,
-            E = EnderStrike,
-            R = EnderCloak,
-            F = TeleportationSlam,
-        },
-        ult = {
-            Q = VoidstepFrenzy,
-            E = StolenGround,
-            R = YouShouldntLook,
-        },
+        base = { Q = EnderTeleportation, E = EnderStrike, R = EnderCloak, F = TeleportationSlam },
+        ult  = { Q = VoidstepFrenzy, E = StolenGround, R = YouShouldntLook },
     }
 
-    self._heartbeat = game:GetService("RunService").Heartbeat:Connect(function(dt)
+    self._heartbeat = RunService.Heartbeat:Connect(function(dt)
         self.Movement:Update(dt)
     end)
 
     return self
 end
 
-function EndermanController:OnM1()        self.M1:Attack() end
-function EndermanController:OnDash(dir)   self.Dash:Dash(dir) end
-function EndermanController:OnBlockDown() self.Block:StartBlock() end
-function EndermanController:OnBlockUp()   self.Block:EndBlock() end
-function EndermanController:OnEvasive(d)  self.Evasive:Activate(d) end
+function EndermanController:OnM1()           self.M1:Attack() end
+function EndermanController:OnDash(dir)      self.Dash:Dash(dir) end
+function EndermanController:OnBlockDown()    self.Block:StartBlock() end
+function EndermanController:OnBlockUp()      self.Block:EndBlock() end
+function EndermanController:OnEvasive(d)     self.Evasive:Activate(d) end
 
 function EndermanController:OnAbility(slot)
     local set     = self.IsAwakened and self.Abilities.ult or self.Abilities.base
     local ability = set[slot]
-    if ability then ability.Use(self.Character, self.Cooldowns, self.Movement) end
+    if ability then ability.Use(self.Character, self.Cooldowns, self.Movement, self.Remotes, self.Anim) end
 end
 
 function EndermanController:OnUltimate()
@@ -97,37 +96,46 @@ end
 
 function EndermanController:_activateUlt()
     self.IsAwakened = true
-    self.Movement:LockMovement(2.5)
-
-    -- Void Dominion cinematic:
-    --   Screen distorts with void static, purple particle eruption,
-    --   terrain fragments begin floating, warped teleport audio
-    -- CinematicRemote:FireAllClients("EndermanVoidDominion", self.Character)
-    -- VFXRemote:FireAllClients("EndermanUltForm", self.Character, true)
-
-    -- Ult passive: Enderman leaves void distortion trails during teleports
-    -- and all teleport-based abilities have 20% reduced cooldown
     self._ultCDMult = 0.80
-    character:SetAttribute("VoidDominionActive", true)
 
-    -- HUDEvent:FireClient(player, "UltActivated", "Enderman", ULT_DURATION)
+    UltActivatorSequence.Activate({
+        character      = self.Character,
+        characterId    = "Enderman",
+        animManager    = self.Anim,
+        remotes        = self.Remotes,
+        movementSystem = self.Movement,
+        onComplete     = function()
+            VFXSystem.Fire("EndermanUltForm", self.Character, true)
+            self.Remotes.HUDRemote:FireClient(self.Player, "UltActivated", "Enderman", ULT_DURATION)
 
-    self.UltTimer:Start(ULT_DURATION,
-        function(timeLeft, ratio)
-            -- HUDEvent:FireClient(player, "UltTick", timeLeft, ratio)
+            -- Ult passive: VoidDominionActive → ability scripts reduce teleport CDs by 20%
+            self.Character:SetAttribute("VoidDominionActive", true)
+
+            self.UltTimer:Start(ULT_DURATION,
+                function(timeLeft, ratio)
+                    self.Remotes.HUDRemote:FireClient(self.Player, "UltTick", timeLeft, ratio)
+                end,
+                function()
+                    self:_revertUlt()
+                end
+            )
         end,
-        function()
-            self:_revertUlt()
-        end
-    )
+    })
 end
 
 function EndermanController:_revertUlt()
     self.IsAwakened = false
     self._ultCDMult = 1.0
     self.Character:SetAttribute("VoidDominionActive", false)
-    -- VFXRemote:FireAllClients("EndermanUltForm", self.Character, false)
-    -- HUDEvent:FireClient(player, "UltReverted", "Enderman")
+
+    VFXSystem.Fire("EndermanUltForm", self.Character, false)
+    UltActivatorSequence.Revert({
+        remotes     = self.Remotes,
+        character   = self.Character,
+        characterId = "Enderman",
+    })
+
+    self.Remotes.HUDRemote:FireClient(self.Player, "UltReverted", "Enderman")
     self.UltGauge:EndUlt()
 end
 

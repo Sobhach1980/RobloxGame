@@ -16,14 +16,19 @@
       R – Last Block Standing
 --]]
 
-local MovementSystem    = require(script.Parent.Parent.Parent.Shared.CombatEngine.MovementSystem)
-local DashSystem        = require(script.Parent.Parent.Parent.Shared.CombatEngine.DashSystem)
-local M1System          = require(script.Parent.Parent.Parent.Shared.CombatEngine.M1System)
-local BlockParrySystem  = require(script.Parent.Parent.Parent.Shared.CombatEngine.BlockParrySystem)
-local EvasiveSystem     = require(script.Parent.Parent.Parent.Shared.CombatEngine.EvasiveSystem)
-local CooldownManager   = require(script.Parent.Parent.Parent.Shared.CombatEngine.CooldownManager)
+local RunService = game:GetService("RunService")
+
+local MovementSystem      = require(script.Parent.Parent.Parent.Shared.CombatEngine.MovementSystem)
+local DashSystem          = require(script.Parent.Parent.Parent.Shared.CombatEngine.DashSystem)
+local M1System            = require(script.Parent.Parent.Parent.Shared.CombatEngine.M1System)
+local BlockParrySystem    = require(script.Parent.Parent.Parent.Shared.CombatEngine.BlockParrySystem)
+local EvasiveSystem       = require(script.Parent.Parent.Parent.Shared.CombatEngine.EvasiveSystem)
+local CooldownManager     = require(script.Parent.Parent.Parent.Shared.CombatEngine.CooldownManager)
 local UltimateGaugeSystem = require(script.Parent.Parent.Parent.Shared.CombatEngine.UltimateGaugeSystem)
 local UltimateTimerSystem = require(script.Parent.Parent.Parent.Shared.CombatEngine.UltimateTimerSystem)
+local AnimationManager    = require(script.Parent.Parent.Parent.Shared.Animation.AnimationManager)
+local UltActivatorSequence = require(script.Parent.Parent.Parent.Shared.Cinematic.UltActivatorSequence)
+local VFXSystem           = require(script.Parent.Parent.Parent.Shared.VFX.VFXSystem)
 
 -- Ability modules
 local OakShield         = require(script.Parent.Abilities.Steve_OakShield)
@@ -37,12 +42,19 @@ local LastBlockStanding = require(script.Parent.Abilities.Steve_LastBlockStandin
 local SteveController = {}
 SteveController.__index = SteveController
 
--- Ultimate form duration in seconds
 local ULT_DURATION = 30
 
-function SteveController.new(character)
+--[[
+    new(character, player, remotes)
+      character : Model
+      player    : Player instance (for HUD FireClient)
+      remotes   : table of RemoteEvent instances from GameServer
+--]]
+function SteveController.new(character, player, remotes)
     local self = setmetatable({}, SteveController)
     self.Character   = character
+    self.Player      = player
+    self.Remotes     = remotes
     self.IsAwakened  = false
 
     -- Combat systems
@@ -53,31 +65,19 @@ function SteveController.new(character)
     self.Evasive     = EvasiveSystem.new(character, "Steve", self.Movement)
     self.Cooldowns   = CooldownManager.new()
     self.UltTimer    = UltimateTimerSystem.new()
+    self.Anim        = AnimationManager.new(character, "Steve")
 
-    -- Ultimate gauge – triggers awakening when full
     self.UltGauge = UltimateGaugeSystem.new(function()
-        -- Notify HUD that ult is ready
-        -- HUDEvent:FireClient(player, "UltReady", true)
+        remotes.HUDRemote:FireClient(player, "UltReady", true)
     end)
     self.UltGauge:StartPassive()
 
-    -- Instantiate abilities (they hold no character state; context passed at use)
     self.Abilities = {
-        base = {
-            Q = OakShield,
-            E = Advancement,
-            R = SwordSlash,
-            F = TNTToss,
-        },
-        ult = {
-            Q = CreativeOverride,
-            E = WorldEditCleave,
-            R = LastBlockStanding,
-        },
+        base = { Q = OakShield, E = Advancement, R = SwordSlash, F = TNTToss },
+        ult  = { Q = CreativeOverride, E = WorldEditCleave, R = LastBlockStanding },
     }
 
-    -- Heartbeat update
-    self._heartbeat = game:GetService("RunService").Heartbeat:Connect(function(dt)
+    self._heartbeat = RunService.Heartbeat:Connect(function(dt)
         self.Movement:Update(dt)
     end)
 
@@ -86,31 +86,17 @@ end
 
 -- ─── Input handlers ────────────────────────────────────────────────────────
 
-function SteveController:OnM1()
-    self.M1:Attack()
-end
-
-function SteveController:OnDash(direction)
-    self.Dash:Dash(direction)
-end
-
-function SteveController:OnBlockDown()
-    self.Block:StartBlock()
-end
-
-function SteveController:OnBlockUp()
-    self.Block:EndBlock()
-end
-
-function SteveController:OnEvasive(direction)
-    self.Evasive:Activate(direction)
-end
+function SteveController:OnM1()             self.M1:Attack() end
+function SteveController:OnDash(direction)  self.Dash:Dash(direction) end
+function SteveController:OnBlockDown()      self.Block:StartBlock() end
+function SteveController:OnBlockUp()        self.Block:EndBlock() end
+function SteveController:OnEvasive(dir)     self.Evasive:Activate(dir) end
 
 function SteveController:OnAbility(slot)
     local set = self.IsAwakened and self.Abilities.ult or self.Abilities.base
     local ability = set[slot]
     if not ability then return end
-    ability.Use(self.Character, self.Cooldowns, self.Movement)
+    ability.Use(self.Character, self.Cooldowns, self.Movement, self.Remotes, self.Anim)
 end
 
 function SteveController:OnUltimate()
@@ -123,71 +109,60 @@ end
 
 function SteveController:_activateUlt()
     self.IsAwakened = true
+    self._ultPassiveDamageMult = 0.90
 
-    -- Lock player briefly for cinematic
-    self.Movement:LockMovement(2.5)
+    UltActivatorSequence.Activate({
+        character      = self.Character,
+        characterId    = "Steve",
+        animManager    = self.Anim,
+        remotes        = self.Remotes,
+        movementSystem = self.Movement,
+        onComplete     = function()
+            -- Aura on after cinematic lock ends
+            VFXSystem.Fire("SteveUltForm", self.Character, true)
+            self.Remotes.HUDRemote:FireClient(self.Player, "UltActivated", "Steve", ULT_DURATION)
 
-    -- Play Steve activation sequence:
-    --   glowing white eyes, black smoke, arena setup camera
-    -- VFXRemote:FireAllClients("SteveUltActivation", self.Character)
-    -- CinematicRemote:FireAllClients("SteveUltCinematic")
-
-    -- Apply form visuals (aura, white eye glow, dark smoke)
-    -- VFXRemote:FireAllClients("SteveUltForm", self.Character, true)
-
-    -- Apply ultimate passive: Steve gains slight damage reduction in ult form
-    self._ultPassiveDamageMult = 0.90   -- takes 10% less damage
-
-    -- Notify HUD to swap moveset icons
-    -- HUDEvent:FireClient(player, "UltActivated", "Steve", ULT_DURATION)
-
-    -- Start countdown
-    self.UltTimer:Start(ULT_DURATION,
-        function(timeLeft, ratio)
-            -- HUDEvent:FireClient(player, "UltTick", timeLeft, ratio)
+            self.UltTimer:Start(ULT_DURATION,
+                function(timeLeft, ratio)
+                    self.Remotes.HUDRemote:FireClient(self.Player, "UltTick", timeLeft, ratio)
+                end,
+                function()
+                    self:_revertUlt()
+                end
+            )
         end,
-        function()
-            self:_revertUlt()
-        end
-    )
+    })
 end
 
 -- ─── Ultimate revert ───────────────────────────────────────────────────────
 
 function SteveController:_revertUlt()
-    self.IsAwakened              = false
-    self._ultPassiveDamageMult   = 1.0
+    self.IsAwakened            = false
+    self._ultPassiveDamageMult = 1.0
 
-    -- Remove form visuals
-    -- VFXRemote:FireAllClients("SteveUltForm", self.Character, false)
+    VFXSystem.Fire("SteveUltForm", self.Character, false)
+    UltActivatorSequence.Revert({
+        remotes     = self.Remotes,
+        character   = self.Character,
+        characterId = "Steve",
+    })
 
-    -- Restore base HUD icons
-    -- HUDEvent:FireClient(player, "UltReverted", "Steve")
-
+    self.Remotes.HUDRemote:FireClient(self.Player, "UltReverted", "Steve")
     self.UltGauge:EndUlt()
 end
 
 -- ─── Damage pipeline ───────────────────────────────────────────────────────
 
---[[
-    OnHitReceived(attacker, damage, config) -> actualDamage
-    Called by the server damage pipeline before applying health loss.
---]]
 function SteveController:OnHitReceived(attacker, damage, config)
-    -- Invincibility frames from evasive
     if self.Evasive:IsCurrentlyInvincible() then return 0 end
 
-    -- Block / parry handling
     local finalDamage = self.Block:OnHitReceived(attacker, damage, config)
 
-    -- Ult passive damage reduction
     if self.IsAwakened and self._ultPassiveDamageMult then
         finalDamage = math.ceil(finalDamage * self._ultPassiveDamageMult)
     end
 
-    -- Update ultimate gauge on damage taken
     self.UltGauge:OnDamageTaken(finalDamage)
-
     return finalDamage
 end
 
