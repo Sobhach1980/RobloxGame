@@ -162,12 +162,19 @@ function UltActivatorSequence.Activate(params)
     }
 
     if remotes and remotes.UltCinematic then
-        -- Everyone sees the light version (aura, animation, sound)
-        remotes.UltCinematic:FireAllClients(lightPayload)
-
-        -- Opponent additionally receives the full cutscene on top
         if opponentPlayer then
-            remotes.UltCinematic:FireClient(opponentPlayer, fullPayload)
+            -- Opponent gets the full cinematic; everyone else gets the light version.
+            -- Fire to each player individually so the opponent is not double-fired.
+            for _, player in ipairs(game:GetService("Players"):GetPlayers()) do
+                if player == opponentPlayer then
+                    remotes.UltCinematic:FireClient(player, fullPayload)
+                else
+                    remotes.UltCinematic:FireClient(player, lightPayload)
+                end
+            end
+        else
+            -- No opponent set — fall back to light payload for everyone
+            remotes.UltCinematic:FireAllClients(lightPayload)
         end
     end
 

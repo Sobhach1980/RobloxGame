@@ -105,32 +105,35 @@ end
 
 function CinematicHandler.OnUltCinematic(data)
     local characterId  = data.CharacterId
-    local charPos      = data.CharacterPos
-    local camType      = data.CameraType
-    local camConfig    = data.CameraConfig or {}
-    local screenText   = data.ScreenText   or ""
-    local textColor    = data.TextColor    or Color3.fromRGB(255,255,255)
-    local soundId      = data.SoundId      or ""
-    local duration     = camConfig.duration or 2.5
+    local soundId      = data.SoundId or ""
 
-    -- Letterbox
+    local char     = CinematicHandler._findCharacter(characterId)
+    local rootPart = char and char:FindFirstChild("HumanoidRootPart")
+
+    -- Always play the activation sound for everyone
+    playSound(soundId, rootPart)
+
+    -- Light payload (FullCinematic = false): spectators only get the sound.
+    -- VFXHandler handles the aura on their end.
+    if not data.FullCinematic then return end
+
+    -- Full cinematic — only the opponent reaches this point
+    local charPos   = data.CharacterPos
+    local camType   = data.CameraType
+    local camConfig = data.CameraConfig or {}
+    local screenText = data.ScreenText  or ""
+    local textColor  = data.TextColor   or Color3.fromRGB(255, 255, 255)
+    local duration   = camConfig.duration or 2.5
+
     showLetterbox(duration)
 
-    -- Name banner (slight delay so camera settles first)
     task.delay(0.4, function()
         showNameBanner(screenText, textColor, duration - 0.4)
     end)
 
-    -- Sound
-    local char = CinematicHandler._findCharacter(characterId)
-    local rootPart = char and char:FindFirstChild("HumanoidRootPart")
-    playSound(soundId, rootPart)
-
-    -- Camera: build config with runtime subject
     camConfig.subject   = rootPart
     camConfig.centerPos = charPos
 
-    -- Dolly: set start/end CFrame around character
     if camType == "dolly" and rootPart then
         local behind = rootPart.CFrame * CFrame.new(0, 4, 16)
         local target = rootPart.CFrame * CFrame.new(0, 2, 6)
@@ -140,12 +143,10 @@ function CinematicHandler.OnUltCinematic(data)
 
     camera:Play(camType, camConfig)
 
-    -- Restore camera after duration
     task.delay(duration, function()
         camera:Play("restore", { duration = 0.4 })
     end)
 
-    -- FOV pulse at peak of animation
     task.delay(duration * 0.6, function()
         camera:PulseFOV(80, 0.3)
     end)
