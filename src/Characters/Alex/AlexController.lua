@@ -64,6 +64,10 @@ function AlexController.new(character, player, remotes)
     end)
     self.UltGauge:StartPassive()
 
+    -- Set by the match system to identify the opposing player.
+    -- Used so the ult cutscene plays in full only for the opponent.
+    self.OpponentPlayer = nil
+
     self.Abilities = {
         base = { Q = QuarryStrike, E = Advancement, R = RedstonePulse, F = EnderShift },
         ult  = { Q = EnderboundAssault, E = RedstoneOverdrive, R = DragonFallExecution },
@@ -74,6 +78,11 @@ function AlexController.new(character, player, remotes)
     end)
 
     return self
+end
+
+-- Called by the match system when a new opponent is assigned or cleared
+function AlexController:SetOpponent(player)
+    self.OpponentPlayer = player
 end
 
 function AlexController:OnM1()            self.M1:Attack() end
@@ -103,6 +112,7 @@ function AlexController:_activateUlt()
         animManager    = self.Anim,
         remotes        = self.Remotes,
         movementSystem = self.Movement,
+        opponentPlayer = self.OpponentPlayer,
         onComplete     = function()
             VFXSystem.Fire("AlexUltForm", self.Character, true)
             self.Remotes.HUDRemote:FireClient(self.Player, "UltActivated", "Alex", ULT_DURATION)

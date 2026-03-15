@@ -64,6 +64,10 @@ function EndermanController.new(character, player, remotes)
     end)
     self.UltGauge:StartPassive()
 
+    -- Set by the match system to identify the opposing player.
+    -- Used so the ult cutscene plays in full only for the opponent.
+    self.OpponentPlayer = nil
+
     self.Abilities = {
         base = { Q = EnderTeleportation, E = EnderStrike, R = EnderCloak, F = TeleportationSlam },
         ult  = { Q = VoidstepFrenzy, E = StolenGround, R = YouShouldntLook },
@@ -74,6 +78,11 @@ function EndermanController.new(character, player, remotes)
     end)
 
     return self
+end
+
+-- Called by the match system when a new opponent is assigned or cleared
+function EndermanController:SetOpponent(player)
+    self.OpponentPlayer = player
 end
 
 function EndermanController:OnM1()           self.M1:Attack() end
@@ -104,6 +113,7 @@ function EndermanController:_activateUlt()
         animManager    = self.Anim,
         remotes        = self.Remotes,
         movementSystem = self.Movement,
+        opponentPlayer = self.OpponentPlayer,
         onComplete     = function()
             VFXSystem.Fire("EndermanUltForm", self.Character, true)
             self.Remotes.HUDRemote:FireClient(self.Player, "UltActivated", "Enderman", ULT_DURATION)

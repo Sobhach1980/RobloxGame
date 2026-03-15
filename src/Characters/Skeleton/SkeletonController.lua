@@ -65,6 +65,10 @@ function SkeletonController.new(character, player, remotes)
     end)
     self.UltGauge:StartPassive()
 
+    -- Set by the match system to identify the opposing player.
+    -- Used so the ult cutscene plays in full only for the opponent.
+    self.OpponentPlayer = nil
+
     self.Abilities = {
         base = { Q = BoneBarrage, E = ArrowStorm, R = SkeletonTrap, F = Aimbot },
         ult  = { Q = PerfectAimProtocol, E = ArrowstormBarrage, R = BonebreakerShot },
@@ -75,6 +79,11 @@ function SkeletonController.new(character, player, remotes)
     end)
 
     return self
+end
+
+-- Called by the match system when a new opponent is assigned or cleared
+function SkeletonController:SetOpponent(player)
+    self.OpponentPlayer = player
 end
 
 function SkeletonController:OnM1()           self.M1:Attack() end
@@ -104,6 +113,7 @@ function SkeletonController:_activateUlt()
         animManager    = self.Anim,
         remotes        = self.Remotes,
         movementSystem = self.Movement,
+        opponentPlayer = self.OpponentPlayer,
         onComplete     = function()
             VFXSystem.Fire("SkeletonUltForm", self.Character, true)
             self.Remotes.HUDRemote:FireClient(self.Player, "UltActivated", "Skeleton", ULT_DURATION)

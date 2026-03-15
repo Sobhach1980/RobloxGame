@@ -15,21 +15,39 @@
 
     Architecture:
       Server calls UltActivatorSequence.Activate(player, character, id, controllers)
-      → fires UltCinematicRemote to all clients
-      Client CinematicHandler picks it up and runs the visual sequence
-      Server waits for LOCK_DURATION then calls onComplete
+
+      → fires UltCinematic:FireClient(opponentPlayer, fullPayload)
+            The opponent (the player being fought) sees the full cinematic:
+            orbiting camera cut, screen text, all VFX, and sound.
+
+      → fires UltCinematic:FireAllClients(lightPayload)
+            Every other client (spectators, teammates in future modes) sees:
+            the character's activation animation, the aura VFX, and the sound,
+            but NOT the camera cut or screen text overlay.
+
+      Server waits for LOCK_DURATION then calls onComplete.
+
+    Params for Activate():
+      character      : Model
+      characterId    : string   ("Steve"|"Alex"|...)
+      animManager    : AnimationManager instance
+      remotes        : table of RemoteEvent instances from GameServer
+      movementSystem : MovementSystem instance
+      opponentPlayer : Player  — the player currently in combat with this character.
+                                 Receives the full cutscene. If nil (e.g. no opponent
+                                 found), all clients fall back to the light payload.
+      onComplete     : function  -- called after lock window ends
 --]]
 
--- Shared module — runs on server. Imports RemoteEvents set up by GameServer.
 local UltActivatorSequence = {}
 
 -- Per-character cinematic configurations
 local SEQUENCES = {
     Steve = {
-        LockDuration   = 2.5,      -- seconds input is blocked
+        LockDuration   = 2.5,
         CameraType     = "orbit",
         CameraConfig   = { radius = 10, height = 3, speed = 0.4, duration = 2.5 },
-        AuraColor      = Color3.fromRGB(200, 200, 255),   -- cool blue-white
+        AuraColor      = Color3.fromRGB(200, 200, 255),
         AuraParticle   = "SteveUltAura",
         EyeGlow        = Color3.fromRGB(255, 255, 255),
         ScreenText     = "LAST BLOCK STANDING",
@@ -41,20 +59,20 @@ local SEQUENCES = {
         LockDuration   = 3.0,
         CameraType     = "orbit",
         CameraConfig   = { radius = 14, height = 5, speed = 0.5, duration = 3.0 },
-        AuraColor      = Color3.fromRGB(140, 60, 220),    -- purple dragon energy
+        AuraColor      = Color3.fromRGB(140, 60, 220),
         AuraParticle   = "AlexUltAura",
         EyeGlow        = Color3.fromRGB(180, 80, 255),
         ScreenText     = "DRAGON'S AWAKENING",
         TextColor      = Color3.fromRGB(180, 100, 255),
         SoundId        = "rbxassetid://ALEX_ULT_ACTIVATE_SFX",
         AnimKey        = "UltActivate",
-        ExtraEffect    = "DragonSilhouette",   -- client spawns dragon shadow overlay
+        ExtraEffect    = "DragonSilhouette",
     },
     Zombie = {
         LockDuration   = 2.0,
         CameraType     = "pan",
         CameraConfig   = { radius = 10, height = 2, startAngle = -0.3, endAngle = 0.3, duration = 2.0 },
-        AuraColor      = Color3.fromRGB(50, 200, 50),     -- infection green
+        AuraColor      = Color3.fromRGB(50, 200, 50),
         AuraParticle   = "ZombieUltAura",
         EyeGlow        = Color3.fromRGB(0, 255, 80),
         ScreenText     = "RELENTLESS HUNGER",
@@ -65,8 +83,8 @@ local SEQUENCES = {
     Enderman = {
         LockDuration   = 2.5,
         CameraType     = "orbit",
-        CameraConfig   = { radius = 12, height = 6, speed = -0.5, duration = 2.5 },  -- reverse orbit
-        AuraColor      = Color3.fromRGB(80, 0, 160),      -- deep void purple
+        CameraConfig   = { radius = 12, height = 6, speed = -0.5, duration = 2.5 },
+        AuraColor      = Color3.fromRGB(80, 0, 160),
         AuraParticle   = "EndermanUltAura",
         EyeGlow        = Color3.fromRGB(160, 0, 255),
         ScreenText     = "VOID DOMINION",
@@ -78,8 +96,8 @@ local SEQUENCES = {
     Skeleton = {
         LockDuration   = 2.0,
         CameraType     = "dolly",
-        CameraConfig   = { duration = 2.0, easingStyle = "Quad" },  -- startCF/endCF set at runtime
-        AuraColor      = Color3.fromRGB(140, 220, 255),   -- icy blue
+        CameraConfig   = { duration = 2.0, easingStyle = "Quad" },
+        AuraColor      = Color3.fromRGB(140, 220, 255),
         AuraParticle   = "SkeletonUltAura",
         EyeGlow        = Color3.fromRGB(100, 200, 255),
         ScreenText     = "PERFECT AIM",
@@ -89,17 +107,6 @@ local SEQUENCES = {
     },
 }
 
---[[
-    Activate(params)
-    params = {
-        character     : Model
-        characterId   : string   ("Steve"|"Alex"|...)
-        animManager   : AnimationManager instance
-        remotes       : table of RemoteEvent instances from GameServer
-        movementSystem: MovementSystem instance
-        onComplete    : function  -- called after lock window ends
-    }
---]]
 function UltActivatorSequence.Activate(params)
     local characterId   = params.characterId
     local seq           = SEQUENCES[characterId]
@@ -109,43 +116,66 @@ function UltActivatorSequence.Activate(params)
         return
     end
 
-    local character     = params.character
-    local animManager   = params.animManager
-    local remotes       = params.remotes
-    local movSys        = params.movementSystem
+    local character      = params.character
+    local animManager    = params.animManager
+    local remotes        = params.remotes
+    local movSys         = params.movementSystem
+    local opponentPlayer = params.opponentPlayer   -- Player | nil
 
     -- 1. Lock input
     if movSys then movSys:LockMovement(seq.LockDuration) end
 
-    -- 2. Play character activation animation
+    -- 2. Play character activation animation (visible to everyone)
     if animManager then
         animManager:Play(seq.AnimKey, { priority = "action4" })
     end
 
-    -- 3. Fire cinematic event to ALL clients
-    --    Clients run camera sequence + apply VFX + show screen text
+    -- 3. Build shared payload (aura + sound — no camera cut or screen text)
+    --    Every client receives this so they see the activation VFX playing.
+    local lightPayload = {
+        CharacterId   = characterId,
+        CharacterPos  = character:FindFirstChild("HumanoidRootPart") and
+                        character.HumanoidRootPart.Position or Vector3.new(0, 0, 0),
+        AuraColor     = seq.AuraColor,
+        AuraParticle  = seq.AuraParticle,
+        EyeGlow       = seq.EyeGlow,
+        SoundId       = seq.SoundId,
+        FullCinematic = false,  -- client: skip camera cut + screen text
+    }
+
+    -- 4. Full cinematic payload — only the opponent sees this.
+    --    Adds the camera sequence, screen text, and any character-specific
+    --    cinematic overlays (dragon silhouette, void static, etc.).
+    local fullPayload = {
+        CharacterId   = characterId,
+        CharacterPos  = lightPayload.CharacterPos,
+        CameraType    = seq.CameraType,
+        CameraConfig  = seq.CameraConfig,
+        AuraColor     = seq.AuraColor,
+        AuraParticle  = seq.AuraParticle,
+        EyeGlow       = seq.EyeGlow,
+        ScreenText    = seq.ScreenText,
+        TextColor     = seq.TextColor,
+        SoundId       = seq.SoundId,
+        ExtraEffect   = seq.ExtraEffect,
+        FullCinematic = true,   -- client: run full camera cut + screen text
+    }
+
     if remotes and remotes.UltCinematic then
-        remotes.UltCinematic:FireAllClients({
-            CharacterId  = characterId,
-            CharacterPos = character:FindFirstChild("HumanoidRootPart") and
-                           character.HumanoidRootPart.Position or Vector3.new(0,0,0),
-            CameraType   = seq.CameraType,
-            CameraConfig = seq.CameraConfig,
-            AuraColor    = seq.AuraColor,
-            AuraParticle = seq.AuraParticle,
-            EyeGlow      = seq.EyeGlow,
-            ScreenText   = seq.ScreenText,
-            TextColor    = seq.TextColor,
-            SoundId      = seq.SoundId,
-            ExtraEffect  = seq.ExtraEffect,
-        })
+        -- Everyone sees the light version (aura, animation, sound)
+        remotes.UltCinematic:FireAllClients(lightPayload)
+
+        -- Opponent additionally receives the full cutscene on top
+        if opponentPlayer then
+            remotes.UltCinematic:FireClient(opponentPlayer, fullPayload)
+        end
     end
 
-    -- 4. Apply server-side form attribute so damage pipeline knows form is active
+    -- 5. Apply server-side form attribute so damage pipeline knows form is active
     character:SetAttribute("UltFormActive", true)
     character:SetAttribute("UltFormId", characterId)
 
-    -- 5. After lock window, trigger moveset swap + ult timer
+    -- 6. After lock window, trigger moveset swap + ult timer
     task.delay(seq.LockDuration, function()
         if params.onComplete then
             params.onComplete()

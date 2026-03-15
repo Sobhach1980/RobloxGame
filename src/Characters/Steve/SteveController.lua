@@ -72,6 +72,10 @@ function SteveController.new(character, player, remotes)
     end)
     self.UltGauge:StartPassive()
 
+    -- Set by the match system to identify the opposing player.
+    -- Used so the ult cutscene plays in full only for the opponent.
+    self.OpponentPlayer = nil
+
     self.Abilities = {
         base = { Q = OakShield, E = Advancement, R = SwordSlash, F = TNTToss },
         ult  = { Q = CreativeOverride, E = WorldEditCleave, R = LastBlockStanding },
@@ -82,6 +86,11 @@ function SteveController.new(character, player, remotes)
     end)
 
     return self
+end
+
+-- Called by the match system when a new opponent is assigned or cleared
+function SteveController:SetOpponent(player)
+    self.OpponentPlayer = player
 end
 
 -- ─── Input handlers ────────────────────────────────────────────────────────
@@ -117,6 +126,7 @@ function SteveController:_activateUlt()
         animManager    = self.Anim,
         remotes        = self.Remotes,
         movementSystem = self.Movement,
+        opponentPlayer = self.OpponentPlayer,
         onComplete     = function()
             -- Aura on after cinematic lock ends
             VFXSystem.Fire("SteveUltForm", self.Character, true)

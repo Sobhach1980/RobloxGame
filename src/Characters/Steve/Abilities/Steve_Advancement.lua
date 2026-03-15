@@ -4,87 +4,97 @@
     Character: Steve
 
     Description:
-      Steve charges forward with his sword levelled, dealing moderate damage
-      to the first enemy hit and sending them airborne. Scales toward an
-      iron-state power surge as Steve's match progression increases.
-      NOTE: This is Steve's unique Advancement — different values, arc, and
-      combat purpose from Alex's Advancement.
+      Steve raises his iron sword above his head with one arm fully extended.
+      The blade pulses with blue-white energy, glowing brighter and brighter
+      until the whole sword is engulfed in a blinding flash — then it
+      re-materialises as a shining diamond sword.
+
+      For 20 seconds Steve's M1 attacks gain diamond weapon stats:
+        +12 flat damage, +15% attack speed, +20% walk speed.
+      After the duration the sword reverts to iron and the cooldown begins.
+
+    Animation:
+      1. Steve extends sword arm upward, sword tip pointing at the sky.
+      2. Blade emits a rising blue-white glow (STEVE_ADVANCEMENT_GLOW anim).
+      3. At peak brightness: full-white flash frame.
+      4. Sword re-materialises in diamond form (STEVE_ADVANCEMENT_TRANSFORM anim).
+      5. Steve lowers arm into ready stance.
 
     Values:
-      Cooldown        : 8.0 s
-      Charge distance : 14 studs
-      Charge speed    : 80 (burst velocity)
-      Damage          : 22
-      StunType        : launcher
-      KnockbackForce  : 48
-      Move lock       : 0.45 s
-      VFX             : forward sword charge trail, black smoke burst
+      Cooldown          : 20.0 s  (starts after diamond form expires)
+      Buff duration     : 20.0 s
+      M1 damage bonus   : +12 flat
+      Attack speed bonus: +15%
+      Walk speed bonus  : +20%
+      Anim lock         : 1.8 s
+      VFX               : sword hold-up → white-blue glow surge → diamond materialise
 --]]
-
-local HitboxSystem = require(script.Parent.Parent.Parent.Parent.Shared.CombatEngine.HitboxSystem)
-local HitStun      = require(script.Parent.Parent.Parent.Parent.Shared.CombatEngine.HitStunKnockback)
 
 local Steve_Advancement = {}
 
-local COOLDOWN       = 8.0
-local CHARGE_SPEED   = 80
-local CHARGE_DIST    = 14
-local DAMAGE         = 22
-local STUN_TYPE      = "launcher"
-local KB_FORCE       = 48
-local MOVE_LOCK      = 0.45
-local HITBOX_SIZE    = Vector3.new(5, 5, 6)
+local COOLDOWN        = 20.0
+local BUFF_DURATION   = 20.0
+local M1_DAMAGE_BONUS = 12
+local SPEED_MULT      = 1.20
+local ANIM_LOCK       = 1.8
 
-function Steve_Advancement.Use(character, cooldowns, movementSystem)
+function Steve_Advancement.Use(character, cooldowns, movementSystem, remotes, animManager)
     if cooldowns:IsOnCooldown("Advancement") then return end
-    if not cooldowns:Start("Advancement", COOLDOWN) then return end
+    -- Prevent re-use while diamond form is already active
+    if character:GetAttribute("SteveAdvancementActive") then return end
 
-    local rootPart = character:FindFirstChild("HumanoidRootPart")
-    if not rootPart then return end
+    -- Lock input for transform animation
+    movementSystem:LockMovement(ANIM_LOCK)
 
-    -- Lock movement during charge
-    movementSystem:LockMovement(MOVE_LOCK)
+    -- Play: extend sword skyward → glow → flash → diamond materialise
+    -- AnimHelper.Play(character, "rbxassetid://STEVE_ADVANCEMENT_RAISE")
 
-    -- Play charge animation
-    -- AnimHelper.Play(character, "rbxassetid://STEVE_ADVANCEMENT_CHARGE")
+    -- VFX: blue-white energy floods up the blade, then a full-white flash
+    -- VFXRemote:FireAllClients("SteveAdvancementTransform", character, "diamond")
 
-    -- Burst forward
-    local chargeDir = rootPart.CFrame.LookVector
-    rootPart.AssemblyLinearVelocity = chargeDir * CHARGE_SPEED
+    task.delay(ANIM_LOCK, function()
+        if not character or not character.Parent then return end
 
-    -- VFX: sword trail, black smoke behind Steve
-    -- VFXRemote:FireAllClients("SteveAdvancementCharge", rootPart.Position, chargeDir)
+        -- Mark diamond form active and set M1 damage bonus attribute
+        -- (M1System reads SteveM1DamageBonus each swing and adds it to base damage)
+        character:SetAttribute("SteveAdvancementActive", true)
+        character:SetAttribute("SteveM1DamageBonus", M1_DAMAGE_BONUS)
 
-    local hit    = false
-    local elapsed = 0
-    local conn
-
-    conn = game:GetService("RunService").Heartbeat:Connect(function(dt)
-        elapsed = elapsed + dt
-        if hit or elapsed >= (CHARGE_DIST / CHARGE_SPEED) + 0.1 then
-            conn:Disconnect()
-            return
+        -- Apply walk speed boost
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        local prevSpeed
+        if humanoid then
+            prevSpeed = humanoid.WalkSpeed
+            humanoid.WalkSpeed = humanoid.WalkSpeed * SPEED_MULT
         end
 
-        local hitboxPos = rootPart.CFrame:PointToWorldSpace(Vector3.new(0, 0, -3.5))
-        HitboxSystem.SpawnMeleeHitbox({
-            Position    = hitboxPos,
-            Size        = HITBOX_SIZE,
-            Duration    = dt,
-            Attacker    = character,
-            PierceCount = 1,
-            OnHit       = function(victim)
-                hit = true
-                HitStun.Apply(victim, {
-                    Damage         = DAMAGE,
-                    StunType       = STUN_TYPE,
-                    KnockbackForce = KB_FORCE,
-                    KnockbackDir   = chargeDir,
-                })
-                -- VFXRemote:FireAllClients("SteveAdvancementHit", victim.HumanoidRootPart.Position)
-            end,
-        })
+        -- Signal HUD: swap sword icon to diamond, show buff timer
+        -- remotes.HUDRemote:FireClient(player, "AdvancementActive", "diamond", BUFF_DURATION)
+
+        -- Revert after buff duration; cooldown starts only after revert
+        task.delay(BUFF_DURATION, function()
+            Steve_Advancement._revert(character, humanoid, prevSpeed)
+            cooldowns:Start("Advancement", COOLDOWN)
+        end)
     end)
+end
+
+-- Reverts diamond form back to iron and clears all stat bonuses
+function Steve_Advancement._revert(character, humanoid, prevSpeed)
+    if not character or not character.Parent then return end
+
+    character:SetAttribute("SteveAdvancementActive", false)
+    character:SetAttribute("SteveM1DamageBonus", 0)
+
+    if humanoid and prevSpeed then
+        humanoid.WalkSpeed = prevSpeed
+    end
+
+    -- VFX: diamond sword dims and reforms as iron
+    -- VFXRemote:FireAllClients("SteveAdvancementTransform", character, "iron")
+
+    -- HUD: revert sword icon back to iron
+    -- remotes.HUDRemote:FireClient(player, "AdvancementExpired")
 end
 
 return Steve_Advancement

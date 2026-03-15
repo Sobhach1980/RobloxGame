@@ -64,6 +64,10 @@ function ZombieController.new(character, player, remotes)
     end)
     self.UltGauge:StartPassive()
 
+    -- Set by the match system to identify the opposing player.
+    -- Used so the ult cutscene plays in full only for the opponent.
+    self.OpponentPlayer = nil
+
     self.Abilities = {
         base = { Q = UndeadSlash, E = ZombiePlague, R = ZombieHorde, F = DecayWave },
         ult  = { Q = InfectionSpread, E = GraveMarch, R = RelentlessHunger },
@@ -74,6 +78,11 @@ function ZombieController.new(character, player, remotes)
     end)
 
     return self
+end
+
+-- Called by the match system when a new opponent is assigned or cleared
+function ZombieController:SetOpponent(player)
+    self.OpponentPlayer = player
 end
 
 function ZombieController:OnM1()           self.M1:Attack() end
@@ -104,6 +113,7 @@ function ZombieController:_activateUlt()
         animManager    = self.Anim,
         remotes        = self.Remotes,
         movementSystem = self.Movement,
+        opponentPlayer = self.OpponentPlayer,
         onComplete     = function()
             VFXSystem.Fire("ZombieUltForm", self.Character, true)
             self.Remotes.HUDRemote:FireClient(self.Player, "UltActivated", "Zombie", ULT_DURATION)

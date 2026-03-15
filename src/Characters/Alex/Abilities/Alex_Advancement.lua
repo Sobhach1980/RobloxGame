@@ -3,70 +3,101 @@
     Ability: Advancement (E)
     Character: Alex
 
-    NOTE: This is Alex's unique Advancement. Completely different gameplay
-    purpose from Steve's Advancement (which is a forward sword charge).
-    Alex's Advancement is a utility buff that improves her redstone synergy
-    and mining pressure — reflects her role as a tech/utility fighter.
-
     Description:
-      Alex activates a short Advancement boost that increases her next
-      ability's effectiveness. For 4 seconds: Redstone Pulse gains +30%
-      damage and extended range, Quarry Strike gains +15 damage and removes
-      its ground-lock delay (instant), and Ender Shift's teleport distance
-      is doubled. Only one ability benefits before Advancement expires.
+      Alex raises her iron pickaxe skyward with both hands, arms fully
+      extended overhead. Redstone-orange light floods through the handle
+      and spreads up into the pick head, intensifying until the whole
+      tool blazes — then a blinding flash, and it re-materialises as a
+      gleaming diamond pickaxe.
+
+      For 20 seconds Alex's M1 attacks gain diamond weapon stats:
+        +10 flat damage, +15% attack speed, -0.1 s Quarry Strike CD
+        per M1 hit, and +15% walk speed.
+      After the duration the pickaxe reverts to iron and the cooldown begins.
+
+    Animation:
+      1. Alex grips pickaxe with both hands and thrusts it straight up.
+      2. Orange-white redstone light floods up from grip to pick head.
+      3. Glow intensifies to a full blinding flash frame.
+      4. Pickaxe re-materialises in diamond form (ALEX_ADVANCEMENT_TRANSFORM).
+      5. Alex lowers the pickaxe into her ready stance.
 
     Values:
-      Cooldown        : 9.0 s
-      Buff duration   : 4.0 s (or until one ability consumes it)
-      Redstone bonus  : +30% damage, +4 stud range
-      Quarry bonus    : +15 damage, ground-lock instant
-      EnderShift bonus: teleport distance x2
-      VFX             : redstone circuit glow on arms, green energy pulse
+      Cooldown              : 20.0 s  (starts after diamond form expires)
+      Buff duration         : 20.0 s
+      M1 damage bonus       : +10 flat
+      Attack speed bonus    : +15%
+      Quarry Strike CD shed : -0.1 s per M1 hit while active
+      Walk speed bonus      : +15%
+      Anim lock             : 1.8 s
+      VFX                   : pickaxe hold-up → orange-white glow → diamond materialise
 --]]
 
 local Alex_Advancement = {}
 
-local COOLDOWN      = 9.0
-local BUFF_DURATION = 4.0
+local COOLDOWN        = 20.0
+local BUFF_DURATION   = 20.0
+local M1_DAMAGE_BONUS = 10
+local SPEED_MULT      = 1.15
+local ANIM_LOCK       = 1.8
 
-function Alex_Advancement.Use(character, cooldowns, movementSystem)
+function Alex_Advancement.Use(character, cooldowns, movementSystem, remotes, animManager)
     if cooldowns:IsOnCooldown("Advancement") then return end
-    if not cooldowns:Start("Advancement", COOLDOWN) then return end
+    -- Prevent re-use while diamond form is already active
+    if character:GetAttribute("AlexAdvancementActive") then return end
 
-    -- VFX: redstone circuit lights up on Alex's arms, green energy pulse
-    -- VFXRemote:FireAllClients("AlexAdvancement", character, true)
+    -- Lock input for transform animation
+    movementSystem:LockMovement(ANIM_LOCK)
 
-    -- Play short buff animation
-    -- AnimHelper.Play(character, "rbxassetid://ALEX_ADVANCEMENT_ACTIVATE")
+    -- Play: both-hands raise → orange glow floods up the pick → flash → diamond
+    -- AnimHelper.Play(character, "rbxassetid://ALEX_ADVANCEMENT_RAISE")
 
-    -- Set advancement attribute that other abilities check
-    character:SetAttribute("AlexAdvancementActive", true)
-    character:SetAttribute("AlexAdvancementConsumed", false)
+    -- VFX: redstone-orange light floods through the pickaxe, full-white flash
+    -- VFXRemote:FireAllClients("AlexAdvancementTransform", character, "diamond")
 
-    task.delay(BUFF_DURATION, function()
-        if not character:GetAttribute("AlexAdvancementConsumed") then
-            Alex_Advancement._expire(character)
+    task.delay(ANIM_LOCK, function()
+        if not character or not character.Parent then return end
+
+        -- Mark diamond form active and set M1 damage bonus attribute
+        -- (M1System reads AlexM1DamageBonus each swing and adds it to base damage)
+        character:SetAttribute("AlexAdvancementActive", true)
+        character:SetAttribute("AlexM1DamageBonus", M1_DAMAGE_BONUS)
+
+        -- Apply walk speed boost
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        local prevSpeed
+        if humanoid then
+            prevSpeed = humanoid.WalkSpeed
+            humanoid.WalkSpeed = humanoid.WalkSpeed * SPEED_MULT
         end
+
+        -- Signal HUD: swap pickaxe icon to diamond, show buff timer
+        -- remotes.HUDRemote:FireClient(player, "AdvancementActive", "diamond", BUFF_DURATION)
+
+        -- Revert after buff duration; cooldown starts only after revert
+        task.delay(BUFF_DURATION, function()
+            Alex_Advancement._revert(character, humanoid, prevSpeed)
+            cooldowns:Start("Advancement", COOLDOWN)
+        end)
     end)
 end
 
--- Called by other Alex abilities when they consume the buff
-function Alex_Advancement.Consume(character)
-    if not character:GetAttribute("AlexAdvancementActive") then return false end
-    character:SetAttribute("AlexAdvancementActive", false)
-    character:SetAttribute("AlexAdvancementConsumed", true)
-    -- VFXRemote:FireAllClients("AlexAdvancement", character, false)
-    return true
-end
+-- Reverts diamond form back to iron and clears all stat bonuses
+function Alex_Advancement._revert(character, humanoid, prevSpeed)
+    if not character or not character.Parent then return end
 
-function Alex_Advancement._expire(character)
     character:SetAttribute("AlexAdvancementActive", false)
-    -- VFXRemote:FireAllClients("AlexAdvancement", character, false)
-end
+    character:SetAttribute("AlexM1DamageBonus", 0)
 
--- Query helper used by other ability scripts
-function Alex_Advancement.IsActive(character)
-    return character:GetAttribute("AlexAdvancementActive") == true
+    if humanoid and prevSpeed then
+        humanoid.WalkSpeed = prevSpeed
+    end
+
+    -- VFX: diamond pickaxe dims and reforms as iron
+    -- VFXRemote:FireAllClients("AlexAdvancementTransform", character, "iron")
+
+    -- HUD: revert pickaxe icon back to iron
+    -- remotes.HUDRemote:FireClient(player, "AdvancementExpired")
 end
 
 return Alex_Advancement
